@@ -18,10 +18,20 @@ const (
 	buffSize = 4096
 )
 
-type Server struct {
+type server struct {
 	readHandler  func(filename string, rf io.ReaderFrom) error
 	writeHandler func(filename string, wt io.WriterTo) error
 	cache        cache.Cache
+}
+
+type request struct {
+	addr *net.UDPAddr
+	conn *net.UDPConn
+}
+
+type file struct {
+	data []byte
+	readable bool
 }
 
 func NewServer(readHandler func(file string, rf io.ReaderFrom) error,
@@ -33,7 +43,7 @@ func NewServer(readHandler func(file string, rf io.ReaderFrom) error,
 	}
 }
 
-func (s *Server) ListenAndServe(addr string) error {
+func (s *server) ListenAndServe(addr string) error {
 	a, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return err
@@ -42,17 +52,18 @@ func (s *Server) ListenAndServe(addr string) error {
 	if err != nil {
 		return err
 	}
-	return s.Serve(conn)
-}
-
-func (s *Server) Serve(conn *net.UDPConn) error {
 	defer conn.Close()
 
+	req := &request{a, conn}
+	return s.Serve(req)
+}
+
+func (s *server) Serve(req *request) error {
 	// size of byte differs
 	buf := make([]byte, buffSize)
 
 	for {
-		_, raddr, err := conn.ReadFromUDP(buf)
+		_, raddr, err := req.conn.ReadFromUDP(buf)
 		if err != nil {
 			// TODO: retry logic maybe?
 			return errors.Wrap(err, "failed to read from UDP connection")
@@ -65,15 +76,12 @@ func (s *Server) Serve(conn *net.UDPConn) error {
 		case *tftp.PacketRequest:
 			conn, err := net.DialUDP("udp", nil, raddr)
 			if err != nil {
-				errPkt := createErrorPacket(errCodeNotDefined, "Something went wrong")
-				data := errPkt.Serialize()
-				if _, err := conn.Write(data); err != nil {
-					log.Println(errors.Wrap(err, "Error writing to UDP"))
-				}
-				return err
+				err := createAndSendErrorPacket(errCodeNotDefined, "Something went wrong")
+				return errors.Wrap(err, "Failed to send error packet")
 			}
+			
 			if pkt.Op == tftp.OpWRQ {
-				s.handleWriteReq(conn, pkt)
+				go s.handleWriteReq(raddr, pkt)
 			}
 		case *tftp.PacketData:
 		case *tftp.PacketAck:
@@ -82,31 +90,71 @@ func (s *Server) Serve(conn *net.UDPConn) error {
 	}
 }
 
-func (s *Server) handleWriteReq(conn *net.UDPConn, req *tftp.PacketRequest) {
+func (s *server) handleWriteReq(caddr *net.UDPAddr, req *tftp.PacketRequest) {
+	waddr, err := net.ResolveUDPAddr("udp", ":0")
+	if err != nil {
+		log.Println("Failed getting UDP address to write to: ", err)
+		return
+	}
+	conn, err := net.DialUDP("udp", waddr, caddr)
+	if err != nil {
+		log.Println("Error dialing UDP to client: ", err)
+		return
+	}
+
 	// check if file already exist in memory
 	file, found := s.cache.Get(req.Filename)
 	if found {
-		errPkt := createErrorPacket(errAlreadyExist, "This file already exists")
-		data := errPkt.Serialize()
-		conn.Write(data)
+		createAndSendErrorPacket(conn, errAlreadyExist, "This file already exists")
 		return
 	}
 
 	// send an ack packet
 	ack := &tftp.PacketAck{}
-	data := ack.Serialize()
-	conn.Write(data)
-	ack.BlockNum++
+	ack.sendAck(conn)
 
 	buf := make([]byte, buffSize)
 	for {
-		
+		_, raddr, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			log.Println("Failed to read data from udp connection")
+			createAndSendErrorPacket(conn, errCodeNotDefined, "Something went wrong")
+			return
+		}
+		packet, err := tftp.ParsePacket(buf)
+		if err != nil {
+			return errors.Wrap(err, "failed to parse the data")
+		}
+		// TODO: Maybe break this into a func
+		switch pkt := packet.(type) {
+		case *tftp.PacketData:
+			if pkt.BlockNum == ack.BlockNum {
+				file, ok := file.([]byte)
+				if !ok {
+					
+				}
+			}
+		// case *tftp.PacketAck:
+		// case *tftp.PacketError:
+		}
 	}
 }
 
-func createErrorPacket(code uint16, msg string) *tftp.PacketError {
-	return &tftp.PacketError{
+func createAndSendErrorPacket(conn *net.UDPConn, code uint16, msg string) error {
+	pkt := &tftp.PacketError{
 		Code: code,
 		Msg:  msg,
 	}
+	data := pkt.Serialize()
+	if _, err := conn.Write(data); err != nil {
+		log.Println(errors.Wrap(err, "Error writing to UDP"))
+		return err
+	}
+	return nil
+}
+
+func (p *tftp.PacketAck) sendAck(conn *net.UDPConn) {
+	data := p.Serialize()
+	conn.Write(data)
+	p.BlockNum++
 }
