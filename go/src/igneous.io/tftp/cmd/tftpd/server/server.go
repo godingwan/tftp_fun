@@ -76,12 +76,6 @@ func (s *Server) Serve(req *request) error {
 		}
 		switch pkt := packet.(type) {
 		case *tftp.PacketRequest:
-			conn, err := net.DialUDP("udp", nil, raddr)
-			if err != nil {
-				err := createAndSendErrorPacket(errCodeNotDefined, "Something went wrong")
-				return errors.Wrap(err, "Failed to send error packet")
-			}
-			
 			if pkt.Op == tftp.OpWRQ {
 				go s.handleWriteReq(raddr, pkt)
 			}
