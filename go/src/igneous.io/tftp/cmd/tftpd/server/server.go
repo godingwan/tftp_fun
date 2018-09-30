@@ -16,9 +16,10 @@ const (
 
 const (
 	buffSize = 4096
+	blockSize = 512
 )
 
-type server struct {
+type Server struct {
 	readHandler  func(filename string, rf io.ReaderFrom) error
 	writeHandler func(filename string, wt io.WriterTo) error
 	cache        cache.Cache
@@ -30,6 +31,7 @@ type request struct {
 }
 
 type file struct {
+	name string
 	data []byte
 	readable bool
 }
@@ -43,7 +45,7 @@ func NewServer(readHandler func(file string, rf io.ReaderFrom) error,
 	}
 }
 
-func (s *server) ListenAndServe(addr string) error {
+func (s *Server) ListenAndServe(addr string) error {
 	a, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return err
@@ -58,7 +60,7 @@ func (s *server) ListenAndServe(addr string) error {
 	return s.Serve(req)
 }
 
-func (s *server) Serve(req *request) error {
+func (s *Server) Serve(req *request) error {
 	// size of byte differs
 	buf := make([]byte, buffSize)
 
@@ -90,7 +92,7 @@ func (s *server) Serve(req *request) error {
 	}
 }
 
-func (s *server) handleWriteReq(caddr *net.UDPAddr, req *tftp.PacketRequest) {
+func (s *Server) handleWriteReq(caddr *net.UDPAddr, req *tftp.PacketRequest) {
 	waddr, err := net.ResolveUDPAddr("udp", ":0")
 	if err != nil {
 		log.Println("Failed getting UDP address to write to: ", err)
@@ -123,19 +125,44 @@ func (s *server) handleWriteReq(caddr *net.UDPAddr, req *tftp.PacketRequest) {
 		}
 		packet, err := tftp.ParsePacket(buf)
 		if err != nil {
-			return errors.Wrap(err, "failed to parse the data")
+			log.Println("Failed to parse the data")
+			return
 		}
-		// TODO: Maybe break this into a func
+
 		switch pkt := packet.(type) {
 		case *tftp.PacketData:
-			if pkt.BlockNum == ack.BlockNum {
-				file, ok := file.([]byte)
-				if !ok {
-					
+			if pkt.BlockNum == 1 { // first packet so must initialize
+				file := &file{name: req.Filename, data: pkt.Data}
+				s.cache.Set(req.Filename, file, cache.NoExpiration)
+				ack.sendAck(conn)
+			} else { // file exist in map
+				var fileData *file
+				if pkt.BlockNum == ack.BlockNum { // check BlockNum matches
+					file, ok := s.cache.Get(req.Filename)
+					if !ok {
+						log.Printf("Could not find data for file %s", req.Filename)
+						return
+					}
+					fileData, ok := file.(*file)
+					if !ok {
+						log.Println("Failed to type assert data into []byte")
+						return
+					}
+					fileData.data = append(fileData.data, pkt.Data...)
+					ack.sendAck(conn)
 				}
+				// Check if it's it's the last data to be transferred
+				if len(pkt.Data) < 512 { // as defined in the RFC
+					log.Printf("File [%s] is ready to be read", fileData.name)
+					fileData.readable = true
+					s.cache.Set(req.Filename, fileData, cache.NoExpiration)
+					return
+				}
+				s.cache.Set(req.Filename, fileData, cache.NoExpiration)
 			}
-		// case *tftp.PacketAck:
-		// case *tftp.PacketError:
+		default:
+			log.Println("Received a non data packet for a write request")
+			return
 		}
 	}
 }
