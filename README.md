@@ -7,10 +7,15 @@ particular, options are not recognized.
 
 Usage
 -----
-TODO
+Grab the project from https://github.com/jsungholee/tftp_fun (go get github.com/jsungholee/tftp_fun). 
+
+To run the server...
+- Go to root of directory
+- type `go run go/src/tftp/cmd/tftpd/main.go`
+- Note: you can also add an optional address as a parameter or it will default to localhost:69
+- Request logs will be outputted to LogFile.txt in root dir
+
 
 Testing
 -------
 TODO
-
-TODO: other relevant documentation
