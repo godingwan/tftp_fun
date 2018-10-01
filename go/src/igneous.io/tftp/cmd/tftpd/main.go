@@ -2,16 +2,13 @@ package main
 
 import (
 	"log"
-	"net"
+
+	"github.com/jsungholee/tftp/tftp/go/src/igneous.io/tftp/cmd/tftpd/server"
 )
 
 func main() {
-	// Connect udp
-	conn, err := net.Dial("udp", "host:port")
-	if err != nil {
-		log.Fatal("Failed to create udp connection")
+	log.Println("Starting TFTP server")
+	if err := server.NewServer().ListenAndServe(""); err != nil {
+		log.Fatal("Server has failed")
 	}
-	defer conn.Close()
-
-	// TODO implement the in-memory tftp server
 }
