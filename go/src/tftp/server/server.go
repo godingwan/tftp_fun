@@ -5,7 +5,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/jsungholee/tftp/tftp/go/src/igneous.io/tftp"
+	"github.com/jsungholee/tftp/tftp/go/src/tftp"
 	"github.com/patrickmn/go-cache"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
